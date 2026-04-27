@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta http-equiv="X-UA-Compatible" content="ie=edge">
+  <link rel="stylesheet" href="css/index.css">
+  <title>聊天室 AI 语音版</title>
+  <script src="/socket.io/socket.io.js"></script>
+</head>
+
+<body>
+  <div class="chat-container" id="chatRoomContainer" style="display: none;">
+    <aside class="members-sidebar">
+      <div class="members-header">
+        <h3>聊天室成员 <span class="member-count" id="memberCount">0</span></h3>
+        <div class="members-tip">点击头像可私聊，点击 AI Assistant 可进入语音对话模式。</div>
+      </div>
+      <div class="members-list" id="membersList">
+        <div class="empty-state">等待加入聊天室...</div>
+      </div>
+    </aside>
+
+    <section class="chat-main">
+      <div class="chat-header">
+        <div class="chat-header-top">
+          <div class="current-chat-info">
+            <span class="chat-mode" id="chatModeLabel">公开聊天</span>
+            <span class="chat-target" id="chatTargetLabel"></span>
+          </div>
+          <div class="chat-toolbar">
+            <button class="toolbar-chip" id="readAloudToggle" type="button" aria-pressed="true">🔊 朗读回复</button>
+            <button class="toolbar-chip" id="phoneModeToggle" type="button" aria-pressed="false">📞 电话模式</button>
+            <button class="toolbar-chip" id="clearAiHistoryBtn" type="button">🧹 清空对话</button>
+            <button class="toolbar-icon" id="settingsToggleBtn" type="button" aria-expanded="false">⚙️ 设置</button>
+          </div>
+        </div>
+
+        <div class="ai-status" id="aiStatusText">点击左侧 AI Assistant，开始文本或语音混合对话。</div>
+
+        <div class="settings-panel hidden" id="settingsPanel">
+          <div class="settings-grid">
+            <label class="settings-item">
+              <span>ASR 引擎</span>
+              <select id="asrEngineSelect">
+                <option value="sensevoice">SenseVoice（默认）</option>
+                <option value="whisper">Whisper</option>
+              </select>
+            </label>
+            <label class="settings-item">
+              <span>TTS 引擎</span>
+              <select id="ttsEngineSelect">
+                <option value="cosyvoice">CosyVoice（推荐）</option>
+                <option value="pyttsx3">pyttsx3</option>
+                <option value="edge-tts">Edge TTS</option>
+              </select>
+            </label>
+            <label class="settings-item">
+              <span>LLM 后端</span>
+              <select id="llmBackendSelect">
+                <option value="ollama">Ollama / Qwen</option>
+                <option value="deepseek-api">DeepSeek API</option>
+                <option value="openai-compatible">OpenAI Compatible</option>
+              </select>
+            </label>
+            <label class="settings-item">
+              <span>LLM 模型</span>
+              <input id="llmModelInput" type="text" placeholder="如 deepseek-chat 或 qwen2.5:7b">
+            </label>
+            <label class="settings-item">
+              <span>朗读语速</span>
+              <input id="speechRateInput" type="range" min="0.6" max="1.6" step="0.1" value="1">
+            </label>
+            <label class="settings-item">
+              <span>朗读音调</span>
+              <input id="speechPitchInput" type="range" min="0.8" max="1.4" step="0.1" value="1">
+            </label>
+          </div>
+          <div class="settings-footer">
+            <span class="settings-note" id="voiceBackendHint">语音后端未连接时，会优先尝试浏览器能力做降级。</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="private-notice" id="privateNoticeBar" style="display: none;">
+        <span>当前正在与 <strong id="privateWithName"></strong> 对话</span>
+        <button class="close-private" id="closePrivateBtn" type="button">切回公开频道</button>
+      </div>
+
+      <div class="messages-area" id="messagesArea">
+        <div class="message-item system-message">
+          <div class="system-bubble">欢迎来到聊天室。这里支持公开聊天、私聊，以及 AI 的文字和语音混合对话。</div>
+        </div>
+      </div>
+
+      <div class="voice-strip">
+        <div class="wave-bars" id="waveBars" aria-hidden="true">
+          <span></span><span></span><span></span><span></span><span></span><span></span>
+          <span></span><span></span><span></span><span></span><span></span><span></span>
+        </div>
+        <div class="voice-hint" id="voiceHintText">文本和语音都能发送给 AI。电话模式下支持按住说话。</div>
+      </div>
+
+      <div class="input-area">
+        <button class="mic-btn" id="voiceRecordBtn" type="button" aria-pressed="false">🎙️</button>
+        <input type="text" id="messageInput" placeholder="输入消息..." autocomplete="off">
+        <button class="send-btn" id="sendBtn" type="button">发送</button>
+      </div>
+    </section>
+  </div>
+
+  <div class="login-overlay" id="loginOverlay">
+    <div class="login-card">
+      <h2>加入聊天室</h2>
+      <input type="text" id="nicknameInput" class="nick-input" placeholder="输入你的昵称" maxlength="16">
+      <div class="login-label">选择你的头像</div>
+      <div class="avatar-selection" id="avatarOptions"></div>
+      <button class="join-btn" id="joinBtn" type="button">加入聊天室</button>
+      <div class="login-tip">进入后点击 AI Assistant，即可切换到支持语音输入、朗读回复和电话模式的 AI 窗口。</div>
+    </div>
+  </div>
+
+  <audio id="ttsAudioPlayer" preload="auto"></audio>
+  <script src="js/index.js"></script>
+</body>
+
+</html>
