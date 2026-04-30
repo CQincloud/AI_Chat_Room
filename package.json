@@ -1,10 +1,20 @@
 {
   "scripts": {
-    "start": "node server.js",
-    "dev": "node server.js"
+    "dev": "vite",
+    "dev:server": "node server.js",
+    "build": "vite build",
+    "preview": "vite preview",
+    "start": "node scripts/start-dev.js",
+    "start:prod": "node server.js"
   },
   "dependencies": {
     "express": "^5.2.1",
-    "socket.io": "^4.8.3"
+    "socket.io": "^4.8.3",
+    "socket.io-client": "^4.8.3",
+    "vue": "^3.5.22"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^5.2.4",
+    "vite": "^5.4.19"
   }
 }

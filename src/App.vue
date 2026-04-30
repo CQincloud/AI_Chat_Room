@@ -1,23 +1,260 @@
-const { createApp, nextTick } = Vue;
+<template>
+  <div class="chat-container" v-if="currentUser">
+    <aside class="members-sidebar">
+      <div class="members-header">
+        <h3>聊天室成员 <span class="member-count">{{ members.length }}</span></h3>
+        <div class="members-tip">
+          点击成员头像可以发起私聊，点击 AI Assistant 可以进入文字/语音混合对话模式。
+        </div>
+      </div>
+
+      <div class="members-list">
+        <div v-if="!members.length" class="empty-state">等待成员加入中...</div>
+        <div
+          v-for="member in members"
+          :key="member.id"
+          class="member-item"
+          :class="{ 'member-item-ai': member.id === AI_USER_ID }"
+          @click="handleMemberClick(member)"
+        >
+          <img class="member-avatar" :src="member.avatarUrl" :alt="member.nickname">
+          <div class="member-name">
+            <span>{{ member.nickname }}</span>
+            <span v-if="member.id === AI_USER_ID" class="member-ai-badge">VOICE</span>
+            <span v-if="currentUser && member.id === currentUser.id" class="member-self-badge">我</span>
+          </div>
+        </div>
+      </div>
+    </aside>
+
+    <section class="chat-main">
+      <div class="chat-header">
+        <div class="chat-header-top">
+          <div class="current-chat-info">
+            <span class="chat-mode">{{ chatModeLabel }}</span>
+            <span class="chat-target">{{ chatTargetLabel }}</span>
+          </div>
+
+          <div class="chat-toolbar">
+            <button
+              class="toolbar-chip"
+              :class="{ 'is-off': !voiceSettings.autoRead, 'is-active': voiceSettings.autoRead }"
+              type="button"
+              :aria-pressed="String(voiceSettings.autoRead)"
+              @click="toggleReadAloud"
+            >
+              {{ voiceSettings.autoRead ? '🔊 朗读回复' : '🔇 静音模式' }}
+            </button>
+
+            <button
+              class="toolbar-chip"
+              :class="{ 'is-active': voiceSettings.phoneMode }"
+              type="button"
+              :aria-pressed="String(voiceSettings.phoneMode)"
+              @click="togglePhoneMode"
+            >
+              {{ voiceSettings.phoneMode ? '📞 电话模式开' : '📞 电话模式关' }}
+            </button>
+
+            <button class="toolbar-chip" type="button" @click="clearAiHistory">🧹 清空对话</button>
+            <button class="toolbar-icon" type="button" :aria-expanded="String(showSettings)" @click="showSettings = !showSettings">⚙️ 设置</button>
+          </div>
+        </div>
+
+        <div class="ai-status">{{ aiStatusText }}</div>
+
+        <div v-show="showSettings" class="settings-panel">
+          <div class="settings-grid">
+            <label class="settings-item">
+              <span>ASR 引擎</span>
+              <select v-model="voiceSettings.asrEngine" @change="persistVoiceSettings">
+                <option value="sensevoice">SenseVoice（默认）</option>
+                <option value="whisper">Whisper</option>
+              </select>
+            </label>
+
+            <label class="settings-item">
+              <span>TTS 引擎</span>
+              <select v-model="voiceSettings.ttsEngine" @change="persistVoiceSettings">
+                <option value="cosyvoice">CosyVoice（推荐）</option>
+                <option value="pyttsx3">pyttsx3</option>
+                <option value="edge-tts">Edge TTS</option>
+              </select>
+            </label>
+
+            <label class="settings-item">
+              <span>LLM 后端</span>
+              <select v-model="voiceSettings.llmBackend" @change="persistVoiceSettings">
+                <option value="ollama">Ollama / Qwen</option>
+                <option value="deepseek-api">DeepSeek API</option>
+                <option value="openai-compatible">OpenAI Compatible</option>
+              </select>
+            </label>
+
+            <label class="settings-item">
+              <span>LLM 模型</span>
+              <input
+                v-model.trim="voiceSettings.llmModel"
+                type="text"
+                placeholder="如 deepseek-chat 或 qwen2.5:7b"
+                @change="persistVoiceSettings"
+              >
+            </label>
+
+            <label class="settings-item">
+              <span>朗读语速</span>
+              <input v-model.number="voiceSettings.speechRate" type="range" min="0.6" max="1.6" step="0.1" @input="persistVoiceSettings">
+            </label>
+
+            <label class="settings-item">
+              <span>朗读音调</span>
+              <input v-model.number="voiceSettings.speechPitch" type="range" min="0.8" max="1.4" step="0.1" @input="persistVoiceSettings">
+            </label>
+          </div>
+
+          <div class="settings-footer">
+            <span class="settings-note">{{ voiceBackendHint }}</span>
+          </div>
+        </div>
+      </div>
+
+      <div v-if="currentPrivateTarget" class="private-notice">
+        <span>当前正在与 <strong>{{ currentPrivateTarget.nickname }}</strong> 对话</span>
+        <button class="close-private" type="button" @click="exitPrivateChat">切回公开频道</button>
+      </div>
+
+      <div ref="messagesArea" class="messages-area">
+        <div
+          v-for="message in messages"
+          :key="message.id"
+          class="message-item"
+          :class="messageItemClass(message)"
+        >
+          <template v-if="message.type === 'system'">
+            <div class="system-bubble">{{ message.content }}</div>
+          </template>
+
+          <template v-else>
+            <img class="message-avatar" :src="message.senderAvatar || defaultAvatars[0]" :alt="message.senderNickname">
+
+            <div class="message-bubble">
+              <div class="message-name">
+                <span>{{ message.senderNickname }}</span>
+                <span v-if="message.isPrivate" class="private-tag">{{ message.isAi ? 'AI 对话' : '私聊' }}</span>
+                <span v-if="message.source === 'voice'" class="voice-source-tag">🎙️ 语音输入</span>
+                <span v-if="message.isAiReply" class="voice-reply-tag">🔊 可朗读</span>
+              </div>
+
+              <div class="message-text">{{ message.content }}</div>
+
+              <div v-if="message.isAiReply" class="message-actions">
+                <button class="message-action-btn" type="button" @click="playReplyAudio(message.content, true)">▶️ 重播</button>
+                <button class="message-action-btn" type="button" @click="stopSpeechPlayback">⏹️ 停止朗读</button>
+              </div>
+            </div>
+          </template>
+        </div>
+      </div>
+
+      <div class="voice-strip">
+        <div class="wave-bars" aria-hidden="true">
+          <span v-for="(level, index) in waveLevels" :key="index" :style="waveBarStyle(level, index)"></span>
+        </div>
+        <div class="voice-hint">{{ voiceHintText }}</div>
+      </div>
+
+      <div class="input-area">
+        <button
+          class="mic-btn"
+          :class="{ recording: isRecording, 'phone-mode': voiceSettings.phoneMode }"
+          type="button"
+          :disabled="!currentUser"
+          :aria-pressed="String(isRecording)"
+          @click="handleMicClick"
+          @pointerdown="handleMicPointerDown"
+          @pointerup="handleMicPointerUp"
+          @pointerleave="handleMicPointerUp"
+          @pointercancel="handleMicPointerUp"
+        >
+          {{ voiceSettings.phoneMode ? '按住说话' : '🎙️' }}
+        </button>
+
+        <input
+          v-model="messageInput"
+          type="text"
+          :placeholder="messagePlaceholder"
+          autocomplete="off"
+          :disabled="!currentUser || isRecording"
+          @keydown.enter.prevent="handleSend"
+        >
+
+        <button class="send-btn" type="button" :disabled="!currentUser || aiRequestInFlight || isRecording" @click="handleSend">发送</button>
+      </div>
+    </section>
+  </div>
+
+  <div v-else class="login-overlay">
+    <div class="login-card">
+      <h2>加入聊天室</h2>
+      <input
+        v-model.trim="loginNickname"
+        type="text"
+        class="nick-input"
+        placeholder="输入你的昵称"
+        maxlength="16"
+        @keydown.enter.prevent="joinChatRoom"
+      >
+      <div class="login-label">选择你的头像</div>
+
+      <div class="avatar-selection">
+        <img
+          v-for="avatar in defaultAvatars"
+          :key="avatar"
+          class="avatar-option"
+          :class="{ selected: selectedAvatar === avatar }"
+          :src="avatar"
+          alt="avatar"
+          @click="selectedAvatar = avatar"
+        >
+      </div>
+
+      <button class="join-btn" type="button" @click="joinChatRoom">加入聊天室</button>
+      <div class="login-tip">
+        进入后点击 AI Assistant，即可切换到支持语音输入、自动朗读和电话模式的 AI 对话窗口。
+      </div>
+    </div>
+  </div>
+
+  <audio ref="ttsAudioPlayer" preload="auto"></audio>
+</template>
+
+<script>
+import { nextTick } from 'vue';
+import { io } from 'socket.io-client';
 
 const socket = io();
 const AI_USER_ID = 'ai-assistant';
-const AI_AVATAR = 'img/g.webp';
-const VOICE_SETTINGS_KEY = 'chat-ai-voice-settings-v3';
-const createMessageId = (prefix) => `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+const AI_AVATAR = '/img/g.webp';
+const VOICE_SETTINGS_KEY = 'chat-ai-voice-settings-vite';
 
-createApp({
+function createMessageId(prefix) {
+  return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+export default {
+  name: 'App',
+
   data() {
     return {
       AI_USER_ID,
       defaultAvatars: [
-        'img/a.webp',
-        'img/b.jpg',
-        'img/c.jpg',
-        'img/d.jpg',
-        'img/e.png',
-        'img/f.jpg',
-        'img/g.webp'
+        '/img/a.webp',
+        '/img/b.jpg',
+        '/img/c.jpg',
+        '/img/d.jpg',
+        '/img/e.png',
+        '/img/f.jpg',
+        '/img/g.webp'
       ],
       currentUser: null,
       currentPrivateTarget: null,
@@ -26,11 +263,11 @@ createApp({
         {
           id: createMessageId('system'),
           type: 'system',
-          content: '欢迎来到聊天室。这里支持公开聊天、私聊，以及 AI 的文字和语音混合对话。'
+          content: '欢迎来到聊天室。这里支持公开聊天、用户私聊，以及 AI 的文本和语音混合对话。'
         }
       ],
       loginNickname: '',
-      selectedAvatar: 'img/a.webp',
+      selectedAvatar: '/img/a.webp',
       messageInput: '',
       voiceConfig: null,
       voiceSettings: {
@@ -63,7 +300,7 @@ createApp({
       activeTypewriterToken: null,
       waveLevels: Array.from({ length: 12 }, () => 0.2),
       aiStatusText: '点击左侧 AI Assistant，开始文本或语音混合对话。',
-      voiceHintText: '文本和语音都能发送给 AI。电话模式下支持按住说话。',
+      voiceHintText: '文本和语音都可以发送给 AI。电话模式下支持按住说话。',
       voiceBackendHint: '语音后端未连接时，会优先尝试浏览器能力做降级。'
     };
   },
@@ -72,7 +309,6 @@ createApp({
     members() {
       return Array.from(this.membersMap.values());
     },
-
     chatModeLabel() {
       if (this.currentPrivateTarget?.id === AI_USER_ID) {
         return 'AI 对话';
@@ -84,14 +320,12 @@ createApp({
 
       return '公开聊天';
     },
-
     chatTargetLabel() {
       return this.currentPrivateTarget ? `当前对象：${this.currentPrivateTarget.nickname}` : '';
     },
-
     messagePlaceholder() {
       if (this.currentPrivateTarget?.id === AI_USER_ID) {
-        return '输入你的问题，或者点击麦克风开始说话...';
+        return '输入你的问题，或点击麦克风开始说话...';
       }
 
       if (this.currentPrivateTarget) {
@@ -110,23 +344,24 @@ createApp({
     this.updateVoiceHint();
   },
 
-  methods: {
-    createMessageId(prefix) {
-      return createMessageId(prefix);
-    },
+  beforeUnmount() {
+    this.stopSpeechPlayback();
+    this.stopVoiceCapture(false);
+    this.teardownAudioGraph();
+    this.stopMediaStream();
+    socket.off();
+  },
 
+  methods: {
     isAiChat() {
       return this.currentPrivateTarget?.id === AI_USER_ID;
     },
-
     getAiSessionId() {
       return this.currentUser ? `ai-session-${this.currentUser.id}` : 'ai-session-guest';
     },
-
     getSpeechRecognitionCtor() {
       return window.SpeechRecognition || window.webkitSpeechRecognition || null;
     },
-
     messageItemClass(message) {
       if (message.type === 'system') {
         return 'system-message';
@@ -136,7 +371,6 @@ createApp({
         ? 'message-item-right'
         : 'message-item-left';
     },
-
     waveBarStyle(level, index) {
       const factor = 0.25 + ((index % 4) * 0.1);
       const height = 8 + Math.max(0, Math.min(1, level)) * 22 * factor * 2.4;
@@ -146,10 +380,9 @@ createApp({
         opacity: String(0.25 + Math.min(0.85, level + 0.2))
       };
     },
-
     appendMessage(message) {
-      const newMessage = {
-        id: this.createMessageId(message.type || 'msg'),
+      const nextMessage = {
+        id: createMessageId(message.type || 'msg'),
         type: message.type || 'message',
         senderNickname: message.senderNickname || '',
         senderAvatar: message.senderAvatar || '',
@@ -160,20 +393,18 @@ createApp({
         source: message.source || 'text'
       };
 
-      this.messages.push(newMessage);
+      this.messages.push(nextMessage);
       this.scrollMessagesToBottom();
-      return newMessage;
+      return nextMessage;
     },
-
     async scrollMessagesToBottom() {
       await nextTick();
-      const area = document.querySelector('.messages-area');
+      const area = this.$refs.messagesArea;
 
       if (area) {
         area.scrollTop = area.scrollHeight;
       }
     },
-
     updateAiStatus(text) {
       if (text) {
         this.aiStatusText = text;
@@ -182,7 +413,7 @@ createApp({
 
       if (this.isRecording) {
         this.aiStatusText = this.browserRecognitionMode
-          ? '正在聆听并实时识别语音...'
+          ? '正在监听并实时识别语音...'
           : '正在录音中，说完后会自动识别并发送给 AI。';
         return;
       }
@@ -194,29 +425,27 @@ createApp({
 
       if (this.isAiChat()) {
         this.aiStatusText = this.voiceSettings.autoRead
-          ? 'AI 对话已就绪，支持文字输入、语音输入和自动朗读。'
-          : 'AI 对话已就绪，目前为静音模式，仅显示文字回复。';
+          ? 'AI 对话已就绪，支持文本输入、语音输入和自动朗读。'
+          : 'AI 对话已就绪，当前为静音模式，仅显示文字回复。';
         return;
       }
 
       this.aiStatusText = '点击左侧 AI Assistant，开始文本或语音混合对话。';
     },
-
     updateVoiceHint() {
       this.voiceHintText = this.voiceSettings.phoneMode
         ? '电话模式已开启，按住麦克风说话，松开后自动发送；朗读时可再次按住打断。'
         : '点击麦克风开始录音，再次点击或静音后自动结束。文本和语音可以混用。';
     },
-
     persistVoiceSettings() {
       localStorage.setItem(VOICE_SETTINGS_KEY, JSON.stringify(this.voiceSettings));
       this.updateVoiceHint();
       this.updateAiStatus();
     },
-
     loadVoiceSettings() {
       const savedSettings = JSON.parse(localStorage.getItem(VOICE_SETTINGS_KEY) || 'null');
-      const mergedSettings = {
+
+      this.voiceSettings = {
         autoRead: true,
         phoneMode: false,
         asrEngine: 'sensevoice',
@@ -229,11 +458,9 @@ createApp({
         ...(savedSettings || {})
       };
 
-      this.voiceSettings = mergedSettings;
       this.updateVoiceHint();
       this.updateAiStatus();
     },
-
     async loadVoiceConfig() {
       try {
         const response = await fetch('/api/voice/config');
@@ -245,9 +472,9 @@ createApp({
 
         this.voiceConfig = data;
         this.voiceBackendHint = data.backendAvailability.voiceBackendConfigured
-          ? 'FastAPI 语音后端已配置，可用 SenseVoice / CosyVoice / Edge TTS 等引擎。'
+          ? 'FastAPI 语音后端已配置，可使用 SenseVoice / CosyVoice / Edge TTS 等引擎。'
           : '尚未配置 FastAPI 语音后端。麦克风会优先尝试浏览器识别，朗读会回退到浏览器语音。';
-      } catch (error) {
+      } catch {
         this.voiceConfig = {
           defaultSettings: {
             autoRead: true,
@@ -259,16 +486,13 @@ createApp({
             speechRate: 1,
             speechPitch: 1
           },
-          backendAvailability: {
-            voiceBackendConfigured: false
-          }
+          backendAvailability: { voiceBackendConfigured: false }
         };
         this.voiceBackendHint = '未能读取语音配置，当前将使用浏览器能力降级。';
       }
 
       this.loadVoiceSettings();
     },
-
     handleMemberClick(member) {
       if (this.currentUser && member.id === this.currentUser.id) {
         this.appendMessage({ type: 'system', content: '不能和自己私聊。' });
@@ -291,13 +515,11 @@ createApp({
 
       this.updateAiStatus();
     },
-
     exitPrivateChat() {
       this.currentPrivateTarget = null;
       this.appendMessage({ type: 'system', content: '已切换回公开频道。' });
       this.updateAiStatus();
     },
-
     joinChatRoom() {
       if (!this.loginNickname.trim()) {
         alert('请输入昵称');
@@ -309,7 +531,6 @@ createApp({
         avatarUrl: this.selectedAvatar
       });
     },
-
     handleSend() {
       if (!this.messageInput.trim()) {
         return;
@@ -342,14 +563,12 @@ createApp({
 
       this.messageInput = '';
     },
-
     buildServerSettings() {
       return {
         ...this.voiceSettings,
         llmModel: this.voiceSettings.llmModel.trim()
       };
     },
-
     ensureAiMode(actionLabel) {
       if (this.isAiChat()) {
         return true;
@@ -359,14 +578,18 @@ createApp({
         type: 'system',
         content: `${actionLabel}需要先切换到 AI Assistant 对话窗口。`
       });
-
       return false;
     },
-
+    // 前端用fetch把消息发给ai，ai返回回复，前端播放回复
+    /* 把用户消息先插到页面里
+          显示一个 “AI 正在思考...” 的占位消息
+          调用 /api/ai/chat
+          返回后替换占位消息
+          如果开启朗读，再调 TTS  */  
     async sendAiMessage(content, source = 'text') {
       const text = content.trim();
 
-      if (!text || this.aiRequestInFlight) {
+      if (!text || this.aiRequestInFlight || !this.currentUser) {
         return;
       }
 
@@ -395,6 +618,7 @@ createApp({
       });
 
       try {
+        
         const response = await fetch('/api/ai/chat', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -406,6 +630,7 @@ createApp({
             settings: this.buildServerSettings()
           })
         });
+
         const data = await response.json();
 
         if (!response.ok) {
@@ -426,7 +651,6 @@ createApp({
         this.updateAiStatus();
       }
     },
-
     async animateAiReply(message, content) {
       const token = { cancelled: false };
 
@@ -454,7 +678,6 @@ createApp({
         await new Promise((resolve) => setTimeout(resolve, 16));
       }
     },
-
     stopSpeechPlayback() {
       if (this.currentAudio) {
         this.currentAudio.pause();
@@ -474,10 +697,12 @@ createApp({
 
       this.updateAiStatus();
     },
-
     speakWithBrowser(text) {
       if (!('speechSynthesis' in window)) {
-        this.appendMessage({ type: 'system', content: '当前浏览器不支持内置语音朗读。' });
+        this.appendMessage({
+          type: 'system',
+          content: '当前浏览器不支持内置语音朗读。'
+        });
         return;
       }
 
@@ -498,21 +723,17 @@ createApp({
       window.speechSynthesis.cancel();
       window.speechSynthesis.speak(utterance);
     },
-
     async playAudioBase64(audioBase64, mimeType) {
       const src = `data:${mimeType || 'audio/mpeg'};base64,${audioBase64}`;
 
       this.$refs.ttsAudioPlayer.src = src;
       this.currentAudio = this.$refs.ttsAudioPlayer;
-
       await this.$refs.ttsAudioPlayer.play();
-
       this.$refs.ttsAudioPlayer.onended = () => {
         this.currentAudio = null;
         this.updateAiStatus();
       };
     },
-
     async playReplyAudio(text, force = false) {
       if (!text?.trim()) {
         return;
@@ -534,6 +755,7 @@ createApp({
             settings: this.voiceSettings
           })
         });
+
         const data = await response.json();
 
         if (!response.ok) {
@@ -554,7 +776,6 @@ createApp({
         this.speakWithBrowser(text);
       }
     },
-
     toggleReadAloud() {
       this.voiceSettings.autoRead = !this.voiceSettings.autoRead;
       this.persistVoiceSettings();
@@ -563,23 +784,21 @@ createApp({
         this.stopSpeechPlayback();
       }
     },
-
     togglePhoneMode() {
       this.voiceSettings.phoneMode = !this.voiceSettings.phoneMode;
       this.persistVoiceSettings();
     },
-
     setWaveLevel(level) {
       this.waveLevels = this.waveLevels.map((_, index) => {
         const factor = 0.25 + ((index % 4) * 0.1);
         return Math.max(0, Math.min(1, level * factor * 2.4));
       });
     },
-
+    // 重置波形图
     resetWaveBars() {
       this.waveLevels = this.waveLevels.map((_, index) => 0.18 + (index % 3) * 0.04);
     },
-
+    // 销毁音频图
     teardownAudioGraph() {
       if (this.waveAnimationFrame) {
         cancelAnimationFrame(this.waveAnimationFrame);
@@ -594,21 +813,21 @@ createApp({
       this.analyser = null;
       this.resetWaveBars();
     },
-
+    // 停止录音
     stopMediaStream() {
       if (this.mediaStream) {
         this.mediaStream.getTracks().forEach((track) => track.stop());
         this.mediaStream = null;
       }
     },
-
+    // 停止录音UI
     stopRecordingUI() {
       this.isRecording = false;
       this.teardownAudioGraph();
       this.stopMediaStream();
       this.updateAiStatus();
     },
-
+    // 监听音频级别
     watchAudioLevels() {
       if (!this.analyser) {
         return;
@@ -641,7 +860,6 @@ createApp({
 
       this.waveAnimationFrame = requestAnimationFrame(() => this.watchAudioLevels());
     },
-
     async setupAudioMonitoring(stream) {
       const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
 
@@ -658,7 +876,6 @@ createApp({
       this.speechDetected = false;
       this.watchAudioLevels();
     },
-
     blobToBase64(blob) {
       return new Promise((resolve, reject) => {
         const reader = new FileReader();
@@ -670,7 +887,6 @@ createApp({
         reader.readAsDataURL(blob);
       });
     },
-
     async handleRecordedAudio(blob) {
       const audioBase64 = await this.blobToBase64(blob);
       const response = await fetch('/api/voice/asr', {
@@ -682,6 +898,7 @@ createApp({
           settings: this.voiceSettings
         })
       });
+
       const data = await response.json();
 
       if (!response.ok) {
@@ -697,7 +914,6 @@ createApp({
       this.messageInput = transcript;
       await this.sendAiMessage(transcript, 'voice');
     },
-
     async startBrowserRecognition(stream) {
       const RecognitionCtor = this.getSpeechRecognitionCtor();
 
@@ -733,13 +949,15 @@ createApp({
       };
 
       recognition.onerror = () => {
-        this.appendMessage({ type: 'system', content: '浏览器语音识别失败，请重试或切换到 FastAPI ASR 后端。' });
+        this.appendMessage({
+          type: 'system',
+          content: '浏览器语音识别失败，请重试或切换到 FastAPI ASR 后端。'
+        });
       };
 
       recognition.onend = async () => {
         const transcript = (this.recognitionTranscript || this.messageInput || '').trim();
         const shouldSend = this.shouldSendRecognition;
-
         this.recognition = null;
         this.browserRecognitionMode = false;
         this.stopRecordingUI();
@@ -758,7 +976,6 @@ createApp({
       this.recognition = recognition;
       recognition.start();
     },
-
     async startVoiceCapture() {
       if (!this.ensureAiMode('语音输入')) {
         return;
@@ -791,6 +1008,7 @@ createApp({
         await this.setupAudioMonitoring(stream);
 
         const recorder = new MediaRecorder(stream);
+        recorder._shouldSend = false;
         this.mediaRecorder = recorder;
 
         recorder.ondataavailable = (event) => {
@@ -800,8 +1018,10 @@ createApp({
         };
 
         recorder.onstop = async () => {
-          const shouldSend = recorder.dataset.shouldSend === 'true';
-          const blob = new Blob(this.audioChunks, { type: recorder.mimeType || 'audio/webm' });
+          const shouldSend = Boolean(recorder._shouldSend);
+          const blob = new Blob(this.audioChunks, {
+            type: recorder.mimeType || 'audio/webm'
+          });
 
           this.mediaRecorder = null;
           this.stopRecordingUI();
@@ -832,7 +1052,6 @@ createApp({
         this.updateAiStatus();
       }
     },
-
     stopVoiceCapture(shouldSend) {
       if (!this.isRecording) {
         return;
@@ -845,14 +1064,13 @@ createApp({
       }
 
       if (this.mediaRecorder && this.mediaRecorder.state !== 'inactive') {
-        this.mediaRecorder.dataset.shouldSend = shouldSend ? 'true' : 'false';
+        this.mediaRecorder._shouldSend = shouldSend;
         this.mediaRecorder.stop();
         return;
       }
 
       this.stopRecordingUI();
     },
-
     handleMicClick() {
       if (this.voiceSettings.phoneMode) {
         return;
@@ -864,7 +1082,6 @@ createApp({
         this.startVoiceCapture();
       }
     },
-
     handleMicPointerDown(event) {
       if (!this.voiceSettings.phoneMode) {
         return;
@@ -873,7 +1090,6 @@ createApp({
       event.preventDefault();
       this.startVoiceCapture();
     },
-
     handleMicPointerUp(event) {
       if (!this.voiceSettings.phoneMode) {
         return;
@@ -885,7 +1101,6 @@ createApp({
         this.stopVoiceCapture(true);
       }
     },
-
     async clearAiHistory() {
       if (!this.ensureAiMode('清空对话')) {
         return;
@@ -895,10 +1110,9 @@ createApp({
         const response = await fetch('/api/ai/history/clear', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            sessionId: this.getAiSessionId()
-          })
+          body: JSON.stringify({ sessionId: this.getAiSessionId() })
         });
+
         const data = await response.json();
 
         if (!response.ok || !data.ok) {
@@ -916,7 +1130,6 @@ createApp({
         });
       }
     },
-
     bindSocketEvents() {
       socket.on('login_success', (userData) => {
         this.currentUser = {
@@ -995,4 +1208,5 @@ createApp({
       });
     }
   }
-}).mount('#app');
+};
+</script>

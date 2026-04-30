@@ -15,7 +15,12 @@ const VOICE_BACKEND_URL = (process.env.VOICE_BACKEND_URL || '').replace(/\/$/, '
 const DEFAULT_LLM_BACKEND = process.env.DEFAULT_LLM_BACKEND || 'deepseek-api';
 const DEFAULT_DEEPSEEK_BASE_URL = 'https://api.deepseek.com';
 const DEFAULT_OLLAMA_BASE_URL = process.env.OLLAMA_BASE_URL || 'http://127.0.0.1:11434';
+const PUBLIC_DIR = path.join(__dirname, 'public');
+const DIST_DIR = path.join(__dirname, 'dist');
+const DIST_INDEX_PATH = path.join(DIST_DIR, 'index.html');
+const HAS_VITE_BUILD = fs.existsSync(DIST_INDEX_PATH);
 
+// 把AI助手添加到用户列表中
 const AI_USER = {
   id: 'ai-assistant',
   nickName: 'AI Assistant',
@@ -26,10 +31,12 @@ const AI_SYSTEM_PROMPT =
   'You are a helpful AI assistant inside a realtime chat room. Reply in Chinese by default, be concise, warm, and practical.';
 
 const users = [];
+// 保存会话上下文
 const aiSessions = new Map();
 
 app.use(express.json({ limit: '15mb' }));
-app.use(express.static(path.join(__dirname, 'public')));
+app.use('/img', express.static(path.join(PUBLIC_DIR, 'img')));
+app.use(express.static(HAS_VITE_BUILD ? DIST_DIR : PUBLIC_DIR));
 
 function loadEnvFile() {
   const envPath = path.join(__dirname, '.env');
@@ -71,10 +78,15 @@ function loadEnvFile() {
   });
 }
 
+// 系统把ai伪装成一个固定成员，加入用户列表中
 function buildUserList() {
   return [...users, AI_USER];
 }
 
+// 获取会话上下文
+// 每个会话有一个 sessionId
+// 第一次对话时，先放一条 system prompt
+// 后面每次对话都从这个历史里继续接着聊
 function getAiHistory(sessionId) {
   if (!aiSessions.has(sessionId)) {
     aiSessions.set(sessionId, [{ role: 'system', content: AI_SYSTEM_PROMPT }]);
@@ -86,7 +98,8 @@ function getAiHistory(sessionId) {
 function clearAiHistory(sessionId) {
   aiSessions.delete(sessionId);
 }
-
+// 保留第一条 system prompt
+// 只取最近 10 条消息，避免上下文无限变长
 function buildRecentHistory(history, currentUserMessage) {
   const nextHistory = [...history, currentUserMessage];
 
@@ -359,6 +372,12 @@ app.post('/api/ai/history/clear', (req, res) => {
   clearAiHistory(sessionId);
   res.json({ ok: true });
 });
+
+if (HAS_VITE_BUILD) {
+  app.get(/^\/(?!api|socket\.io).*/, (_req, res) => {
+    res.sendFile(DIST_INDEX_PATH);
+  });
+}
 
 io.on('connection', (socket) => {
   console.log(`${socket.id} connected`);
