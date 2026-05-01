@@ -2,7 +2,7 @@ import { defineConfig } from 'vite';
 import vue from '@vitejs/plugin-vue';
 
 export default defineConfig({
-  base: '/AI_Chat_Room/',
+  base: process.env.NODE_ENV === 'production' ? '/AI_Chat_Room/' : '/',
   plugins: [vue()],
   server: {
     port: 5173,

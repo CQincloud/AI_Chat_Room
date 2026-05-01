@@ -24,8 +24,18 @@ const HAS_VITE_BUILD = fs.existsSync(DIST_INDEX_PATH);
 const AI_USER = {
   id: 'ai-assistant',
   nickName: 'AI Assistant',
-  avatar: 'img/g.webp'
+  avatar: '/img/g.webp'
 };
+
+const AVATAR_FILENAMES = new Set([
+  'a.webp',
+  'b.jpg',
+  'c.jpg',
+  'd.jpg',
+  'e.png',
+  'f.jpg',
+  'g.webp'
+]);
 
 const AI_SYSTEM_PROMPT =
   'You are a helpful AI assistant inside a realtime chat room. Reply in Chinese by default, be concise, warm, and practical.';
@@ -35,6 +45,14 @@ const users = [];
 const aiSessions = new Map();
 
 app.use(express.json({ limit: '15mb' }));
+app.get('/:avatarFile', (req, res, next) => {
+  if (!AVATAR_FILENAMES.has(req.params.avatarFile)) {
+    next();
+    return;
+  }
+
+  res.sendFile(path.join(PUBLIC_DIR, 'img', req.params.avatarFile));
+});
 app.use('/img', express.static(path.join(PUBLIC_DIR, 'img')));
 app.use(express.static(HAS_VITE_BUILD ? DIST_DIR : PUBLIC_DIR));
 
@@ -81,6 +99,21 @@ function loadEnvFile() {
 // 系统把ai伪装成一个固定成员，加入用户列表中
 function buildUserList() {
   return [...users, AI_USER];
+}
+
+function normalizeAvatarUrl(avatarUrl) {
+  if (!avatarUrl || typeof avatarUrl !== 'string') {
+    return '';
+  }
+
+  const trimmed = avatarUrl.trim();
+  const filename = path.basename(trimmed);
+
+  if (AVATAR_FILENAMES.has(filename)) {
+    return `/img/${filename}`;
+  }
+
+  return trimmed;
 }
 
 // 获取会话上下文
@@ -399,10 +432,12 @@ io.on('connection', (socket) => {
       return;
     }
 
+    const avatarUrl = normalizeAvatarUrl(data.avatarUrl);
+
     const newUser = {
       id: socket.id,
       nickName: data.nickname,
-      avatar: data.avatarUrl
+      avatar: avatarUrl
     };
 
     users.push(newUser);
@@ -411,7 +446,7 @@ io.on('connection', (socket) => {
     socket.emit('login_success', {
       id: socket.id,
       nickname: data.nickname,
-      avatarUrl: data.avatarUrl
+      avatarUrl
     });
 
     io.emit('join', `${data.nickname} 加入了聊天室`);
